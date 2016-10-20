@@ -5,3 +5,4 @@
 	$ ./config
 ### 2. Build
 ### 3. Run
+	$ ./run start

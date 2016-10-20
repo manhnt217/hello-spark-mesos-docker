@@ -1,16 +1,95 @@
 #!/bin/bash
-USAGE="USAGE: run {start|stop|reset}"
+USAGE="USAGE: run {start|stop|restart|clean|reset}"
+MESOS_TAG="0.28.0-2.0.16.ubuntu1404"
+NUM_MASTER=2
+NUM_SLAVE=3
 
-function start() {
-	startZookeeper
+alias echo='echo "[INFO]" '
+
+function start()
+{
+	startZookeepers
+	startMesosMasters
+	startMesosSlaves
+
+	startSparkShell
 }
 
-function startZookeeper()
+function startZookeepers()
 {
 	echo "Starting zookeeper..."
-	docker run -d --name zk1 netflixoss/exhibitor:1.5.2 1> /dev/null 2>&1 || docker start zk1 1> /dev/null
-	zk1IP=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' "$@" zk1)
+	docker run -d --name zk1 netflixoss/exhibitor:1.5.2 2> /dev/null || docker start zk1 1> /dev/null
+	zk1IP=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' zk1)
 	echo "Zookeeper started at $zk1IP"
+}
+
+function startMesosMasters()
+{
+	echo "Starting maters..."
+	for (( i = 1; i <= $NUM_MASTER; i++ )); do
+		startMaster "$i"
+	done
+}
+
+function startMaster()
+{
+	docker run -d --name master$1 \
+		-e MESOS_PORT=5050 \
+		-e MESOS_ZK=zk://$zk1IP:2181/mesos \
+		-e MESOS_QUORUM=1 \
+		-e MESOS_REGISTRY=in_memory \
+		-e MESOS_LOG_DIR=/var/log/mesos \
+		-e MESOS_WORK_DIR=/var/tmp/mesos \
+		mesosphere/mesos-master:$MESOS_TAG 2> /dev/null || docker start master$1 1> /dev/null
+	ip=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' master$1)
+	declare "master$1IP"="$ip"
+	echo "Master$1 started at $ip"
+}
+
+function startMesosSlaves()
+{
+	echo "Starting slaves..."
+	for (( i = 1; i <= $NUM_SLAVE; i++ )); do
+		startSlave "$i"
+	done
+}
+
+function startSlave()
+{
+	docker run -d --name slave$1 --privileged \
+		-e MESOS_PORT=5051 \
+		-e MESOS_MASTER=zk://$zk1IP:2181/mesos \
+		-e MESOS_SWITCH_USER=0 \
+		-e MESOS_CONTAINERIZERS=mesos \
+		-e MESOS_LOG_DIR=/var/log/mesos \
+		-e MESOS_WORK_DIR=/var/tmp/mesos \
+		-e SPARK_HOME=/opt/spark \
+		-e PATH=$PATH:/opt/spark/bin \
+		-v "$(pwd)/spark:/opt/spark:ro" \
+		mesosphere/mesos-slave:0.28.0-2.0.16.ubuntu1404 --launcher=posix 2> /dev/null || docker start slave$1 1> /dev/null
+	ip=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' slave$1)
+	declare "slave$1IP"="$ip"
+	echo "Slave$1 started at $ip"		
+}
+
+#Spark shell
+
+function startSparkShell()
+{
+	echo "Starting spark-shell..."
+	docker run --rm -it --privileged \
+		-e MESOS_PORT=5051 \
+		-e MESOS_MASTER=zk://$zk1IP:2181/mesos \
+		-e MESOS_SWITCH_USER=0 \
+		-e MESOS_CONTAINERIZERS=mesos \
+		-e MESOS_LOG_DIR=/var/log/mesos \
+		-e MESOS_WORK_DIR=/var/tmp/mesos \
+		-e SPARK_HOME=/opt/spark \
+		-e PATH=$PATH:/opt/spark/bin \
+		-v "$(pwd)/spark:/opt/spark:ro" \
+		--entrypoint spark-shell \
+		mesosphere/mesos-slave:0.28.0-2.0.16.ubuntu1404 \
+		--master=mesos://zk://$zk1IP:2181/mesos --driver-memory=512m --executor-memory=512m --total-executor-cores=4
 }
 
 #Stop and remove containers
@@ -18,40 +97,87 @@ function startZookeeper()
 function reset()
 {
 	echo "Cleaning up containers..."
-	stop
-	removeContainers
+	clean
 	start
+}
+
+function restart()
+{
+	echo "Restart containers..."
+	stop
+	start
+}
+
+function stop()
+{
+	stopMesosSlaves
+	stopMesosMasters
+	stopZookeepers
+}
+
+function clean()
+{
+	stop
+	removeMesosSlaves 1> /dev/null 2>&1
+	removeMesosMasters 1> /dev/null 2>&1
+	removeZookeepers 1> /dev/null 2>&1
 }
 
 #Stop containers
 
-function stop()
+function stopZookeepers()
 {
-	stopZookeeper
+	echo "Stopping Zookeepers..."
+	docker stop zk1
 }
 
-function stopZookeeper()
+function stopMesosMasters()
 {
-	docker stop zk1 1> /dev/null 2>&1
+	echo "Stopping Mesos masters..."
+	for (( i = 1; i <= $NUM_MASTER; i++ )); do
+		docker stop "master$i"
+	done
+}
+
+function stopMesosSlaves()
+{
+	echo "Stopping Mesos slaves..."
+	for (( i = 1; i <= $NUM_SLAVE; i++ )); do
+		docker stop "slave$i"
+	done
 }
 
 #Remove containers
 
-function removeContainers()
+function removeZookeepers()
 {
-	removeZookeeper
+	docker rm -f zk1
 }
 
-function removeZookeeper()
+function removeMesosMasters()
 {
-	docker rm -f zk1 1> /dev/null 2>&1
+	for (( i = 1; i <= $NUM_MASTER; i++ )); do
+		docker rm -f "master$i"
+	done
 }
+function removeMesosSlaves()
+{
+	for (( i = 1; i <= $NUM_SLAVE; i++ )); do
+		docker rm -f "slave$i"
+	done
+}
+
+#Begin
 
 if [[ ! -z $1 ]]; then
 	if 	[[ $1 == "reset" ]]; then
 		reset
 	elif [[ $1 == "stop" ]]; then
 		stop
+	elif [[ $1 == "clean" ]]; then
+		clean
+	elif [[ $1 == "restart" ]]; then
+		restart
 	elif [[ $1 == "start" ]]; then
 		start
 	else 
@@ -60,3 +186,5 @@ if [[ ! -z $1 ]]; then
 else
 	echo $USAGE
 fi
+
+unalias echo
