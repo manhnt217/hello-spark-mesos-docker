@@ -25,7 +25,7 @@ function startZookeepers()
 
 function startMesosMasters()
 {
-	echo "Starting maters..."
+	echo "Starting masters..."
 	for (( i = 1; i <= $NUM_MASTER; i++ )); do
 		startMaster "$i"
 	done
