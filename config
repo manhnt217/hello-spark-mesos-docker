@@ -1,0 +1,10 @@
+#!/bin/bash
+#Download Spark binary
+SPARK_BIN=spark-1.6.1-bin-hadoop2.6
+if [[ ! -f $SPARK_BIN.tgz ]]; then
+	echo "Downloading spark binary..."
+	curl -O http://d3kbcqa49mib13.cloudfront.net/$SPARK_BIN.tgz
+fi
+echo "Extracting..."
+tar -zxf $SPARK_BIN.tgz && mv $SPARK_BIN spark
+#Modify spark/conf/log4j.properties
