@@ -1,0 +1,62 @@
+#!/bin/bash
+USAGE="USAGE: run {start|stop|reset}"
+
+function start() {
+	startZookeeper
+}
+
+function startZookeeper()
+{
+	echo "Starting zookeeper..."
+	docker run -d --name zk1 netflixoss/exhibitor:1.5.2 1> /dev/null 2>&1 || docker start zk1 1> /dev/null
+	zk1IP=$(docker inspect --format '{{ .NetworkSettings.IPAddress }}' "$@" zk1)
+	echo "Zookeeper started at $zk1IP"
+}
+
+#Stop and remove containers
+
+function reset()
+{
+	echo "Cleaning up containers..."
+	stop
+	removeContainers
+	start
+}
+
+#Stop containers
+
+function stop()
+{
+	stopZookeeper
+}
+
+function stopZookeeper()
+{
+	docker stop zk1 1> /dev/null 2>&1
+}
+
+#Remove containers
+
+function removeContainers()
+{
+	removeZookeeper
+}
+
+function removeZookeeper()
+{
+	docker rm -f zk1 1> /dev/null 2>&1
+}
+
+if [[ ! -z $1 ]]; then
+	if 	[[ $1 == "reset" ]]; then
+		reset
+	elif [[ $1 == "stop" ]]; then
+		stop
+	elif [[ $1 == "start" ]]; then
+		start
+	else 
+		echo $USAGE
+	fi
+else
+	echo $USAGE
+fi
